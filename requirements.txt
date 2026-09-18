@@ -1,0 +1,6 @@
+pygame>=2.5
+# Dev dependencies (not required at runtime):
+#   pip install -e ".[dev]"
+# pytest>=8.0
+# mypy>=1.10
+# ruff>=0.5
