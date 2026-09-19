@@ -56,3 +56,31 @@ def test_world_spawns_and_indexes() -> None:
     org.alive = False
     world.rebuild_indices()
     assert org in world.organisms
+
+
+def test_prune_dead_keeps_living_and_recent_corpses() -> None:
+    cfg = SimulationConfig(world_width=50, world_height=50, seed=3)
+    world = World(cfg, random.Random(3))
+    world.generate_food()
+    rng = random.Random(9)
+    genome = Genome.random(rng, ("speed", "vision"))
+
+    keep_alive = world.spawn_organism(genome, generation=1, energy=50.0)
+    corpses = [world.spawn_organism(genome, generation=1, energy=50.0) for _ in range(12)]
+    for org in corpses:
+        org.alive = False
+
+    budget = 4
+    world.prune_dead(budget)
+
+    assert keep_alive in world.organisms
+    corpses_kept = [o for o in corpses if o in world.organisms]
+    assert len(corpses_kept) == budget
+    # the most recent corpses (tail of the append-ordered list) survive
+    assert corpses[-budget:] == corpses_kept
+    # spatial indices reference only the survivors
+    for org in world.org_grid.items():
+        assert org in world.organisms
+    # negative budget prunes nothing
+    world.prune_dead(-1)
+    assert len(world.organisms) == 1 + budget

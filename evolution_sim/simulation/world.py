@@ -162,7 +162,9 @@ class World:
         self.rng = rng
         self.width = config.world_width
         self.height = config.world_height
-        self.terrain = Terrain(self.width, self.height, config.seed)
+        self.terrain = Terrain(
+            self.width, self.height, config.seed, water_penalty=config.terrain_movement_water_penalty
+        )
         self.patches: list[FoodPatch] = []
         self.organisms: list[Organism] = []
         self.org_grid: SpatialGrid[Organism] = SpatialGrid(config.spatial_cell_size)
@@ -216,28 +218,31 @@ class World:
     def prune_dead(self, max_dead: int) -> None:
         """Drop the oldest dead bodies so long runs stay fast.
 
-        Always preserves every living organism; when more than ``max_dead``
-        corpses have accumulated, only the most recent ``max_dead`` are kept
-        (the organism list is append-ordered, so "most recent" is the tail).
-        Deterministic — no RNG involved — so state signatures and
+        Always preserves every living organism and the original spawn order;
+        when more than ``max_dead`` corpses have accumulated, only the oldest
+        excess corpses are removed (the organism list is append-ordered, so
+        relative order — and therefore monotonically increasing ids — is
+        untouched). Deterministic — no RNG involved — so state signatures and
         save/load determinism are unaffected.
         """
         if max_dead < 0:
             return
-        alive: list[Organism] = []
-        dead: list[Organism] = []
-        for org in self.organisms:
-            if org.alive:
-                alive.append(org)
-            else:
-                dead.append(org)
-        if len(dead) <= max_dead:
-            if len(alive) != len(self.organisms):
-                self.organisms = alive + dead
-                self.rebuild_indices()
+        dead_total = sum(1 for o in self.organisms if not o.alive)
+        if dead_total <= max_dead:
             return
-        self.organisms = alive + dead[-max_dead:]
-        self.rebuild_indices()
+        drop = dead_total - max_dead
+        kept: list[Organism] = []
+        removed = False
+        skipped = 0
+        for org in self.organisms:
+            if not org.alive and skipped < drop:
+                skipped += 1
+                removed = True
+                continue
+            kept.append(org)
+        if removed:
+            self.organisms = kept
+            self.rebuild_indices()
 
     def food_near(self, x: float, y: float, radius: float) -> list[FoodPatch]:
         return self.food_grid.query(x, y, radius)

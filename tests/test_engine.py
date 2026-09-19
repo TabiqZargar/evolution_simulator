@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+import random
+
+import pytest
 from conftest import assert_finite
 
 from evolution_sim.config import SimulationConfig
 from evolution_sim.simulation.engine import Engine
+from evolution_sim.simulation.environment import Biome
+from evolution_sim.simulation.genome import Genome
 
 
 def test_engine_init_populates() -> None:
@@ -104,3 +109,45 @@ def test_organism_ids_monotonic() -> None:
     ids = [o.organism_id for o in eng.world.organisms]
     assert ids == sorted(ids)
     assert len(set(ids)) == len(ids)
+
+
+def test_water_movement_costs_more_than_grass() -> None:
+    cfg = SimulationConfig(seed=11, world_width=40, world_height=40, initial_population=0)
+    eng = Engine(cfg)
+    eng.init()
+    terrain = eng.world.terrain
+
+    water_cell = next(
+        (cx, cy)
+        for cy in range(terrain.height)
+        for cx in range(terrain.width)
+        if terrain.biome_at(cx, cy) == Biome.WATER
+    )
+    grass_cell = next(
+        (cx, cy)
+        for cy in range(terrain.height)
+        for cx in range(terrain.width)
+        if terrain.biome_at(cx, cy) == Biome.GRASS
+    )
+    assert water_cell != grass_cell
+
+    genome = Genome.random(random.Random(7), ("speed", "vision"))
+    org_water = eng.world.spawn_organism(
+        genome, generation=1, energy=50.0, x=water_cell[0] + 0.5, y=water_cell[1] + 0.5
+    )
+    org_grass = eng.world.spawn_organism(
+        genome, generation=1, energy=50.0, x=grass_cell[0] + 0.5, y=grass_cell[1] + 0.5
+    )
+
+    eng._apply_movement(org_water, 0.25, 0.0)
+    eng._apply_movement(org_grass, 0.25, 0.0)
+
+    cost_water = org_water.energy_spent
+    cost_grass = org_grass.energy_spent
+    assert cost_water > cost_grass
+    # identical step and speed; only the terrain penalty differs
+    assert cost_water / cost_grass == pytest.approx(cfg.terrain_movement_water_penalty, rel=1e-6)
+    # the penalty affects energy cost only — movement is otherwise unchanged
+    assert org_water.x == water_cell[0] + 0.75 and org_water.y == water_cell[1] + 0.5
+    assert org_grass.x == grass_cell[0] + 0.75 and org_grass.y == grass_cell[1] + 0.5
+    assert org_water.energy < org_grass.energy

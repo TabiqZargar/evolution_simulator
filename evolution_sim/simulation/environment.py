@@ -96,9 +96,16 @@ class ValueNoise:
 class Terrain:
     """2D biome grid + fertility map, generated deterministically from a seed."""
 
-    def __init__(self, width: int, height: int, seed: int) -> None:
+    def __init__(
+        self,
+        width: int,
+        height: int,
+        seed: int,
+        water_penalty: float = 1.0,
+    ) -> None:
         self.width = width
         self.height = height
+        self.water_penalty = water_penalty
         self.noise_elev = ValueNoise(seed * 2 + 1, lattice=10)
         self.noise_moist = ValueNoise(seed * 2 + 2, lattice=7)
         self.biomes: list[list[Biome]] = []
@@ -145,6 +152,8 @@ class Terrain:
 
     def movement_penalty_at(self, x: float, y: float) -> float:
         biome = self.biome_at(int(x), int(y))
+        if biome == Biome.WATER:
+            return self.water_penalty
         return BIOME_INFO_FINAL[biome].movement_penalty
 
     def water_at(self, x: float, y: float) -> bool:

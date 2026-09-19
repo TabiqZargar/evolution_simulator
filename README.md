@@ -288,7 +288,9 @@ nothing depends on timing, hash ordering or the OS.
 - **Analytics**: `species_enabled`, `species_similarity_threshold`,
   `diversity_warning_threshold`, `ancestry_depth`, `pedigree_record_limit`.
 - **Performance**: `spatial_cell_size` (spatial-hash cell size for the hot
-  spatial queries). `SimulationConfig.validate()` rejects inconsistent values.
+  spatial queries), `dead_organism_budget` (how many corpses are kept around
+  for the UI; older ones are dropped at each generation so long runs stay
+  fast). `SimulationConfig.validate()` rejects inconsistent values.
 
 ```sh
 # JSON config file (any subset of fields; unknown keys are ignored)
@@ -307,7 +309,10 @@ Pure Python, one `SimulationConfig`-size world:
   mid-range desktop).
 - With predation enabled, spatial queries and per-predator decision-making add
   ~1.5–3× overhead (≈ 8–22 s per generation observed over a 16-generation
-  run).
+  run). Dead bodies accumulate over time in the organism pool; a configurable
+  budget (`dead_organism_budget`) trims the oldest corpses each generation, so
+  per-tick cost stops growing after a few generations instead of drifting up
+  forever.
 - 1000 generations is therefore typically tens of minutes, not seconds. For
   long studies prefer `--headless`, dump `--csv-stats`/`--json-stats`, and run
   a `resource_density`/`mutation_rate` sweep with `--experiment`.
