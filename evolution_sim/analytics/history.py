@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from evolution_sim.analytics.statistics import GenerationStats
+from evolution_sim.analytics.statistics import GenerationStats, RunSummary, summarize
 
 
 @dataclass
@@ -32,6 +32,10 @@ class History:
 
     def summary(self, tail: int = 5) -> list[GenerationStats]:
         return self.entries[-tail:]
+
+    def run_summary(self) -> RunSummary:
+        """Aggregate the whole run into a single :class:`RunSummary`."""
+        return summarize(self.entries)
 
     def to_dict(self) -> list[dict[str, Any]]:
         return [e.to_dict() for e in self.entries]

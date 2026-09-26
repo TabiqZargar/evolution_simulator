@@ -59,13 +59,26 @@ def mutate(genome: Genome, config: SimulationConfig, rng: Random) -> Genome:
     ``mutation_strength``; with ``point_mutation_chance`` probability the
     gene instead snaps to a brand new random value (a point mutation).
     """
+    mutated = mutate_with_count(genome, config, rng)
+    return mutated[0]
+
+
+def mutate_with_count(genome: Genome, config: SimulationConfig, rng: Random) -> tuple[Genome, int]:
+    """Like :func:`mutate`, but also returns how many genes were touched.
+
+    The mutated gene count is observational metadata used by the simulation
+    ledger; it never influences the mutation itself, so calling either
+    function consumes randomness identically.
+    """
     genes = dict(genome.traits)
     base_rate = genome.gene("mutation_rate", config.mutation_rate) * 2.0 + config.mutation_rate * 0.5
     rate = min(max(base_rate, 0.0), 1.0)
 
+    mutated_count = 0
     for key in genes:
         if rng.random() >= rate:
             continue
+        mutated_count += 1
         lo, hi = trait_bounds(key)
         span = hi - lo
         if rng.random() < config.point_mutation_chance:
@@ -80,4 +93,4 @@ def mutate(genome: Genome, config: SimulationConfig, rng: Random) -> Genome:
             config.gene_mutation_rate_max,
         ),
     )
-    return Genome(genes)
+    return Genome(genes), mutated_count

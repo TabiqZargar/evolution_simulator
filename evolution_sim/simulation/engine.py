@@ -23,7 +23,20 @@ from dataclasses import dataclass
 from typing import Any, Optional
 
 from evolution_sim.analytics.history import History
+from evolution_sim.analytics.observability import (
+    EV_BIRTH,
+    EV_DEATH,
+    EV_FEED,
+    EV_GENERATION,
+    EV_MUTATION,
+    EventLog,
+)
 from evolution_sim.analytics.statistics import (
+    DEATH_HUNTED,
+    DEATH_OLD_AGE,
+    DEATH_STARVATION,
+    DEATH_STRESS,
+    GenerationLedger,
     GenerationStats,
     Species,
     detect_species,
@@ -36,7 +49,7 @@ from evolution_sim.simulation.genome import PREDATOR_TRAITS, PREY_TRAITS, Genome
 from evolution_sim.simulation.organism import Organism
 from evolution_sim.simulation.reproduction import (
     can_reproduce,
-    create_offspring,
+    create_offspring_with_lifecycle,
     find_mate,
     offspring_position,
 )
@@ -95,6 +108,8 @@ class Engine:
         self.births = 0
         self.deaths = 0
         self._species_list: Optional[list[Species]] = None
+        self._gen_ledger = GenerationLedger()
+        self.events = EventLog(capacity=config.event_log_capacity)
 
     # ------------------------------------------------------------------ setup
     def populate(self) -> None:
@@ -355,6 +370,7 @@ class Engine:
         config = self.config
         eating_radius = config.eating_radius
         max_energy = config.max_energy
+        fed_total = 0.0
         for organism in self.world.organisms:
             if not organism.alive:
                 continue
@@ -373,6 +389,10 @@ class Engine:
             gain = taken * patch.nutrition * efficiency
             organism.energy = min(max_energy, organism.energy + gain)
             organism.energy_harvested += gain
+            fed_total += taken
+        if fed_total > 0.0:
+            self._gen_ledger.resources_consumed += fed_total
+            self.events.record(EV_FEED, self.tick, self.generation, value=fed_total)
 
     # ------------------------------------------------------------- predation
     def _resolve_predation(self) -> None:
@@ -418,7 +438,7 @@ class Engine:
             predator.energy = min(config.max_energy, predator.energy + gain)
             predator.energy_harvested += gain
             predator.fights_won += 1
-            self._kill(prey, cause="hunted")
+            self._kill(prey, cause=DEATH_HUNTED)
         else:
             counter = prey.aggression * prey.size * 0.45
             if self.rng.random() < counter:
@@ -460,7 +480,9 @@ class Engine:
 
     def _birth(self, mother: Organism, father: Organism) -> None:
         config = self.config
-        genome, energy, _cost = create_offspring(mother, father, config, self.rng)
+        genome, energy, _cost, mutations = create_offspring_with_lifecycle(
+            mother, father, config, self.rng
+        )
         child_gen = max(mother.generation, father.generation) + 1
         x, y = offspring_position(mother, father, self.rng, config)
         child = self.world.spawn_organism(
@@ -474,6 +496,11 @@ class Engine:
         )
         self._remember_pedigree(child)
         self.births += 1
+        self._gen_ledger.reproductions += 1
+        self._gen_ledger.mutations += mutations
+        self.events.record(EV_BIRTH, self.tick, self.generation, detail=str(child.organism_id))
+        if mutations > 0:
+            self.events.record(EV_MUTATION, self.tick, self.generation, detail=str(child.organism_id), value=mutations)
 
     def _remember_pedigree(self, organism: Organism) -> None:
         self.pedigree.append({"id": organism.organism_id, "a": organism.parent_a, "b": organism.parent_b})
@@ -487,11 +514,11 @@ class Engine:
                 continue
             cause: Optional[str] = None
             if organism.energy <= 0.0:
-                cause = "starvation"
+                cause = DEATH_STARVATION
             elif organism.health <= 0.0:
-                cause = "stress"
+                cause = DEATH_STRESS
             elif organism.age >= self._max_age(organism) and organism.health <= 0.65:
-                cause = "old age"
+                cause = DEATH_OLD_AGE
             if cause:
                 self._kill(organism, cause)
 
@@ -502,6 +529,8 @@ class Engine:
         fitness = compute_fitness(organism, self.config, living_children)
         organism.record_death(cause, final_fitness=fitness)
         self.deaths += 1
+        self._gen_ledger.record_death(organism.age, cause)
+        self.events.record(EV_DEATH, self.tick, self.generation, detail=cause)
 
     def _living_children(self) -> dict[int, int]:
         counts: dict[int, int] = {}
@@ -540,10 +569,19 @@ class Engine:
             self._temperature_now(),
             event.label() if event else None,
             self._species_list,
+            ledger=self._gen_ledger,
         )
         self.history.push(stats)
+        self.events.record(
+            EV_GENERATION,
+            self.tick,
+            self.generation,
+            detail="extinct" if stats.extinct else "",
+            value=stats.population,
+        )
         self.births = 0
         self.deaths = 0
+        self._gen_ledger = GenerationLedger()
         self.generation += 1
         if stats.extinct:
             logger.warning("World went extinct at generation %d.", stats.generation)

@@ -5,7 +5,11 @@ from __future__ import annotations
 import random
 
 from evolution_sim.config import SimulationConfig
-from evolution_sim.simulation.genetics import crossover, mutate
+from evolution_sim.simulation.genetics import (
+    crossover,
+    mutate,
+    mutate_with_count,
+)
 from evolution_sim.simulation.genome import PREY_TRAITS, Genome
 
 
@@ -35,6 +39,29 @@ def test_zero_rate_means_no_change() -> None:
     mutated = mutate(original, cfg, rng)
     for key in PREY_TRAITS:
         assert mutated.gene(key) == original.gene(key)
+
+
+def test_mutate_with_count_zero_rate_counts_zero() -> None:
+    cfg = SimulationConfig(mutation_rate=0.0)
+    rng = _rng()
+    original = Genome.random(rng, PREY_TRAITS).with_gene("mutation_rate", 0.0)
+    mutated, count = mutate_with_count(original, cfg, rng)
+    assert count == 0
+    assert mutated == original
+
+
+def test_mutate_with_count_matches_changed_genes() -> None:
+    cfg = SimulationConfig(mutation_rate=1.0, mutation_strength=1.0)
+    rng = _rng()
+    original = Genome.random(rng, PREY_TRAITS)
+    changed = 0
+    for _ in range(50):
+        mutated, count = mutate_with_count(original, cfg, rng)
+        assert count == sum(
+            mutated.gene(k) != original.gene(k) for k in PREY_TRAITS
+        )
+        changed += (count > 0)
+    assert changed > 0
 
 
 def test_config_rate_is_a_floor_contribution() -> None:

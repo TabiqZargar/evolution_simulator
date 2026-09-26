@@ -123,6 +123,7 @@ class SimulationConfig:
 
     # --- Statistics reporting ----------------------------------------------
     report_every: int = 25  # headless CLI progress every N generations
+    event_log_capacity: int = 5000  # max events kept in the engine's live event log
 
     # ------------------------------------------------------------------ extras
     def validate(self) -> None:
@@ -131,6 +132,8 @@ class SimulationConfig:
             raise ValueError("world dimensions must be positive")
         if self.initial_population < 0 or self.target_population < 0:
             raise ValueError("population sizes cannot be negative")
+        if self.initial_population > self.max_population:
+            raise ValueError("initial_population must be <= max_population")
         if self.max_population < self.target_population:
             raise ValueError("max_population must be >= target_population")
         if self.generation_length <= 0:
@@ -139,16 +142,81 @@ class SimulationConfig:
             raise ValueError("mutation_rate must be in [0, 1]")
         if not (0.0 <= self.mutation_strength <= 1.0):
             raise ValueError("mutation_strength must be in [0, 1]")
+        if not (0.0 <= self.point_mutation_chance <= 1.0):
+            raise ValueError("point_mutation_chance must be in [0, 1]")
+        if not (0.0 <= self.gene_mutation_rate_min <= self.gene_mutation_rate_max <= 1.0):
+            raise ValueError("gene_mutation_rate bounds must satisfy 0 <= min <= max <= 1")
         if self.crossover_mode not in ("uniform", "blend"):
             raise ValueError("crossover_mode must be 'uniform' or 'blend'")
+        if not (0.0 <= self.crossover_blend_alpha <= 1.0):
+            raise ValueError("crossover_blend_alpha must be in [0, 1]")
         if self.seed is not None and self.seed < 0:
             raise ValueError("seed cannot be negative")
         if not (0.0 < self.resource_density <= 1.0):
             raise ValueError("resource_density must be in (0, 1]")
+        if self.resource_quantity < 0 or self.resource_regen_rate < 0:
+            raise ValueError("resource quantity and regen rate cannot be negative")
+        if not (0.0 < self.resource_nutrition <= 1.0):
+            raise ValueError("resource_nutrition must be in (0, 1]")
         if self.species_similarity_threshold <= 0.0 or self.species_similarity_threshold > 1.0:
             raise ValueError("species_similarity_threshold must be in (0, 1]")
         if not (0.0 <= self.base_temperature <= 1.0):
             raise ValueError("base_temperature must be in [0, 1]")
+        if not (0.0 <= self.seasonal_amplitude <= 1.0):
+            raise ValueError("seasonal_amplitude must be in [0, 1]")
+        if self.seasonal_period <= 0:
+            raise ValueError("seasonal_period must be positive")
+        if self.temperature_stress_energy < 0 or self.temperature_stress_health < 0:
+            raise ValueError("temperature stress penalties cannot be negative")
+        if self.max_energy <= 0:
+            raise ValueError("max_energy must be positive")
+        if self.starting_energy < 0 or self.initial_health < 0:
+            raise ValueError("starting energy and initial health cannot be negative")
+        if self.movement_energy_cost < 0:
+            raise ValueError("movement_energy_cost cannot be negative")
+        if not (0.0 <= self.ingestion_rate):
+            raise ValueError("ingestion_rate cannot be negative")
+        if self.eating_radius <= 0:
+            raise ValueError("eating_radius must be positive")
+        if not (0.0 < self.reproduction_energy_threshold <= self.max_energy):
+            raise ValueError("reproduction_energy_threshold must be in (0, max_energy]")
+        if not (0.0 <= self.reproduction_energy_cost_fraction <= 1.0):
+            raise ValueError("reproduction_energy_cost_fraction must be in [0, 1]")
+        if not (0.0 <= self.offspring_energy_fraction <= 1.0):
+            raise ValueError("offspring_energy_fraction must be in [0, 1]")
+        if self.offspring_energy_floor < 0:
+            raise ValueError("offspring_energy_floor cannot be negative")
+        if self.reproduction_cooldown < 0 or self.min_age_to_reproduce < 0:
+            raise ValueError("reproduction cooldown and min age cannot be negative")
+        if self.mating_range < 0:
+            raise ValueError("mating_range cannot be negative")
+        if self.lifespan_min_ticks <= 0 or self.lifespan_max_ticks <= 0:
+            raise ValueError("lifespan bounds must be positive")
+        if self.lifespan_min_ticks > self.lifespan_max_ticks:
+            raise ValueError("lifespan_min_ticks must be <= lifespan_max_ticks")
+        if self.vision_base < 0 or self.vision_range < self.vision_base:
+            raise ValueError("vision_range must be >= vision_base and non-negative")
+        if self.terrain_movement_water_penalty < 1.0:
+            raise ValueError("terrain_movement_water_penalty must be >= 1.0")
+        if self.event_frequency < 0.0 or self.event_frequency > 1.0:
+            raise ValueError("event_frequency must be in [0, 1]")
+        if self.event_min_duration <= 0 or self.event_max_duration < self.event_min_duration:
+            raise ValueError("event durations must be positive and min <= max")
+        if self.resource_initial_fill < 0:
+            raise ValueError("resource_initial_fill cannot be negative")
+        if self.dead_organism_budget < 0:
+            raise ValueError("dead_organism_budget cannot be negative")
+        if self.spatial_cell_size <= 0:
+            raise ValueError("spatial_cell_size must be positive")
+        if self.event_log_capacity < 0:
+            raise ValueError("event_log_capacity cannot be negative")
+        if self.report_every <= 0:
+            raise ValueError("report_every must be positive")
+        if self.predators_enabled:
+            if self.predator_initial_population < 0:
+                raise ValueError("predator_initial_population cannot be negative")
+            if self.predator_max_population < self.predator_initial_population:
+                raise ValueError("predator_max_population must be >= predator_initial_population")
 
     def __post_init__(self) -> None:
         self.validate()
@@ -178,6 +246,84 @@ class SimulationConfig:
 SIMULATION_CONFIG_FIELDS: dict[str, Any] = {
     f.name: f.type for f in fields(SimulationConfig)
 }
+
+# Human/machine readable grouping of every config field. Used by tooling
+# (CLI help, docs, validation tests) to present options in logical sections.
+FIELD_GROUPS: dict[str, tuple[str, ...]] = {
+    "population": ("world_width", "world_height", "initial_population", "target_population", "max_population", "seed"),
+    "generation": ("generation_length", "replenish_to_target"),
+    "genetics": (
+        "mutation_rate",
+        "mutation_strength",
+        "point_mutation_chance",
+        "crossover_mode",
+        "crossover_blend_alpha",
+        "gene_mutation_rate_min",
+        "gene_mutation_rate_max",
+    ),
+    "organism": (
+        "starting_energy",
+        "max_energy",
+        "initial_health",
+        "movement_energy_cost",
+        "ingestion_rate",
+        "rest_energy_threshold",
+        "eating_radius",
+    ),
+    "reproduction": (
+        "reproduction_energy_threshold",
+        "reproduction_energy_cost_fraction",
+        "offspring_energy_fraction",
+        "offspring_energy_floor",
+        "reproduction_cooldown",
+        "mating_range",
+        "min_age_to_reproduce",
+    ),
+    "aging": ("lifespan_min_ticks", "lifespan_max_ticks"),
+    "movement": ("vision_base", "vision_range", "wander_angle_sigma", "flee_vision_factor"),
+    "environment": (
+        "base_temperature",
+        "seasonal_amplitude",
+        "seasonal_period",
+        "temperature_stress_energy",
+        "temperature_stress_health",
+        "terrain_movement_water_penalty",
+    ),
+    "resources": (
+        "resource_density",
+        "resource_quantity",
+        "resource_regen_rate",
+        "resource_nutrition",
+        "resource_initial_fill",
+    ),
+    "events": ("events_enabled", "event_frequency", "event_min_duration", "event_max_duration"),
+    "predators": (
+        "predators_enabled",
+        "predator_initial_population",
+        "predator_max_population",
+        "predator_attack_range",
+        "predator_hunt_reward",
+        "predator_hunt_cooldown",
+        "predator_hunt_energy_fraction",
+        "predator_replenish_fraction",
+        "predator_metabolism_multiplier",
+        "predator_initial_speed_floor",
+        "prey_attack_penalty",
+    ),
+    "species": ("species_enabled", "species_similarity_threshold"),
+    "ancestry": ("ancestry_depth", "pedigree_record_limit"),
+    "diversity": ("diversity_warning_threshold",),
+    "performance": ("spatial_cell_size", "dead_organism_budget"),
+    "statistics": ("report_every", "event_log_capacity"),
+}
+
+
+def field_group(name: str) -> str:
+    """Return the group a config field belongs to ('' for unknown fields)."""
+    for group, members in FIELD_GROUPS.items():
+        if name in members:
+            return group
+    return ""
 
 
 # --------------------------------------------------------------------------- #

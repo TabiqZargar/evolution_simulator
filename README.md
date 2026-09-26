@@ -42,7 +42,10 @@ combinations of those events.
   fully deterministic byte-for-byte save/resume format.
 - Pygame visualisation (organisms coloured by trait or species, terrain map,
   fitness/diversity/population/speed charts, selection + ancestry panels).
-- 48 unit/integration tests, strict `mypy`, and `ruff`-clean.
+- Lifecycle statistics per generation (births, deaths, mutations,
+  reproductions, food consumed, achieved lifespan, deaths by cause), a
+  run-level summary, and a capped, deterministic live event log.
+- 87 unit/integration tests, strict `mypy`, and `ruff`-clean.
 
 ## Requirements & Install
 
@@ -155,10 +158,11 @@ behaviour:
 | `attack` (predators) | hunt success chance |
 
 Energy: `max_energy` cap, `starting_energy`, movement costs
-(`movement_energy_cost · (0.5 + speed)`; movement-penalty and water-penalty
-knobs exist in the config for future terrain-influenced movement but are not
-applied in the current engine), rest below `rest_energy_threshold`, starvation
-at 0. Infants start with `energy` from the reproduction cost model, never below
+(`movement_energy_cost · (0.5 + speed)`).
+Terrain affects movement: stepping onto water costs `terrain_movement_water_penalty`
+more energy than grassland, so the terrain is a genuine selection pressure on
+movement/heuristics. Organisms rest below `rest_energy_threshold`, starve at 0.
+Infants start with `energy` from the reproduction cost model, never below
 `offspring_energy_floor`.
 
 ### Genetics & reproduction
@@ -236,6 +240,34 @@ mitigating it.
   All components are in `[0, 1]`, so fitness is a bounded weighted average.
   Selection itself happens purely through death and reproduction.
 
+### Statistics, ledger & event log
+
+Every recorded generation (`GenerationStats`) exposes the usual trait averages,
+diversity, species count, predator/prey split — and lifecycle metrics tracked
+across the generation's ticks:
+
+- `births` / `deaths` and the mirror `reproductions` (a birth is a reproduction);
+- `mutations` — the total number of genes actually mutated (counted in
+  `genetics.mutate_with_count`, not inferred);
+- `resources_consumed` — food ingested from patches this generation;
+- `avg_lifespan` — the *achieved* lifespan, i.e. the mean age at death this
+  generation (not the gene value);
+- `avg_age`, `avg_energy` — descriptors of the living population;
+- `deaths_by_cause` (`starvation`, `stress`, `old age`, `hunted`;
+  `old age` ↔ `old_age`, see `statistics.DEATH_CAUSES`) and the derived
+  `environmental_deaths` (thermal-stress deaths).
+
+The engine keeps these in a `GenerationLedger` that resets at each generation
+boundary; `History.run_summary()` aggregates the whole run into one
+`RunSummary` (total births/deaths/mutations, food consumed, min/max/avg
+population, overall mean lifespan, extinct flag).
+
+A live **event log** (`analytics/observability.py`) records births, deaths,
+mutations, generation boundaries and feeding into a capped FIFO
+(`event_log_capacity`, 0 disables it; this is observational only). It is
+deterministic for a given seed and is deliberately *not* persisted — it never
+enters `EngineState`, so save/resume formats are unchanged.
+
 ### Replenishment
 
 When `replenish_to_target` is enabled (default), each new generation keeps the
@@ -248,7 +280,8 @@ while *trait* evolution remains fully un-scripted.
 
 Everything that makes randomness is driven by one `random.Random` seeded from
 the config. The same seed + config produces the **byte-for-byte same state** —
-nothing depends on timing, hash ordering or the OS.
+nothing depends on timing, hash ordering or the OS. This covers the world,
+every organism, the recorded statistics, *and* the live event log.
 
 - `save_state(engine, path)` / `load_state(path)` persist the full world —
   terrain, food patches, every organism, RNG state, event manager, history,
@@ -286,11 +319,20 @@ nothing depends on timing, hash ordering or the OS.
   `predator_replenish_fraction`, `predator_metabolism_multiplier`,
   `predator_initial_speed_floor`, `prey_attack_penalty`.
 - **Analytics**: `species_enabled`, `species_similarity_threshold`,
-  `diversity_warning_threshold`, `ancestry_depth`, `pedigree_record_limit`.
+  `diversity_warning_threshold`, `ancestry_depth`, `pedigree_record_limit`,
+  `report_every`, `event_log_capacity`.
 - **Performance**: `spatial_cell_size` (spatial-hash cell size for the hot
   spatial queries), `dead_organism_budget` (how many corpses are kept around
   for the UI; older ones are dropped at each generation so long runs stay
-  fast). `SimulationConfig.validate()` rejects inconsistent values.
+  fast).
+
+`FIELD_GROUPS` in `config.py` maps every field to one of these groups (used by
+tooling and validated by the test-suite to stay complete).
+`SimulationConfig.validate()` rejects inconsistent values with explicit
+messages — e.g. `reproduction_energy_threshold > max_energy`,
+`lifespan_min > lifespan_max`, `vision_range < vision_base`,
+`spatial_cell_size ≤ 0`, negative budgets/capacities, and out-of-range gene
+mutation bounds.
 
 ```sh
 # JSON config file (any subset of fields; unknown keys are ignored)
@@ -329,7 +371,8 @@ evolution_sim/
 ├── main.py                # CLI entry point
 ├── __main__.py            # enables `python -m evolution_sim`
 ├── analytics/
-│   ├── statistics.py      # trait stats, diversity, species detection, GenerationStats
+│   ├── statistics.py      # trait stats, diversity, species, GenerationStats, RunSummary, ledger
+│   ├── observability.py   # SimEvent / EventLog (capped, deterministic, not persisted)
 │   ├── experiments.py     # parameter sweeps across seeds -> CSV/JSON
 │   └── history.py         # per-generation record store
 ├── persistence/
@@ -351,7 +394,7 @@ evolution_sim/
     ├── camera.py          # pan / zoom / world<->screen transforms
     ├── ui.py              # info / selection / ancestry panels + history charts
     └── colors.py          # palettes: traits (viridis), species, biomes
-tests/                     # 48 tests: engine determinism, genetics, persistence...
+tests/                     # 87 tests: engine determinism, genetics, persistence...
 ```
 
 The engine layer (`simulation/`) has **zero** pygame imports — the
@@ -360,14 +403,17 @@ visualisation is a pure consumer of `Engine`.
 ## Development
 
 ```sh
-python -m pytest            # 48 tests, deterministic
+python -m pytest            # 87 tests, deterministic
 python -m mypy evolution_sim  # strict typing, no untyped flyovers
 python -m ruff check .        # lint
 ```
 
-The test-suite asserts byte-for-byte determinism, that all organism energies
-stay bounded and finite across generations, replenishment restores population,
-and that save→load→continue reproduces the same future exactly.
+The test-suite asserts byte-for-byte determinism (identical history *and*
+event log for a seed), that all organism energies stay bounded and finite
+across generations, replenishment restores population, lifecycle tallies stay
+self-consistent (e.g. `mutations` matches the event stream; births/deaths/
+reproductions invariants), config field groups cover every field, and that
+save→load→continue reproduces the same future exactly.
 
 ## License
 
